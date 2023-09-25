@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 
-# -------------------------------------------------------------------------
-#                                                                         -
-#  Interactive File Renamer (InFiRen)                                     -
-#                                                                         -
-#  Created by Fonic <https://github.com/fonic>                            -
-#  Date: 04/23/19 - 09/13/23                                              -
-#                                                                         -
-# -------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+#                                                                              -
+#  Interactive File Renamer (InFiRen)                                          -
+#                                                                              -
+#  Created by Fonic <https://github.com/fonic>                                 -
+#  Date: 04/23/19 - 09/25/23                                                   -
+#                                                                              -
+# ------------------------------------------------------------------------------
 
 
 # --------------------------------------
@@ -16,58 +16,114 @@
 #                                      -
 # --------------------------------------
 
-# Script version
-SCRIPT_VERSION="3.11"
+# Application info
+APP_TITLE="Interactive File Renamer (InFiRen)"
+APP_VERSION="4.0 (09/25/23)"
+APP_DIR="$(dirname -- "$(realpath -- "$0")")"
+APP_FILE="$(basename -- "$(realpath -- "$0")")"
+APP_NAME="${APP_FILE%.*}"
+APP_CONFIG="${APP_DIR}/${APP_NAME}.conf"
 
 # Input/edit prompt
 PROMPT_CMD="cmd> "
 PROMPT_EDIT="edit> "
 
-# Sort options used when generating file/folder listings
-SORT_OPTS=("-V")
-
 # Help/usage text explaining available commands
 read -r -d '' HELP_COMMANDS <<- EOD
-	rs, replace-string <str> <rep>   Replace string <str> with replacement <rep>
-	re, replace-regex <re> <tmp>     Match regular expression <re> and replace
-	                                 matching string according to template <tmp>
-	                                 Example: re "([0-9]+)x([0-9]+)" "S\\1E\\2"
-	pr, pre, prepend <str>           Prepend string <str>
-	ap, post, append <str>           Append string <str>
-	rd, replace-dots                 Replace single dots with spaces
-	id, insert-dash                  Insert dash after first word
-	ca, capitalize                   Capitalize space-separated words
-	up, upper, uppercase             Convert all characters to uppercase
-	lo, lower, lowercase             Convert all characters to lowercase
-	tr, trim, st, strip              Trim leading & trailing whitespace
+	rs, replace-string STR REP    Replace string STR with replacement REP
+	re, replace-regex RE TMP      Match regular expression RE and replace
+	                              matching string according to template TMP
+	                              (e.g. re "([0-9]+)x([0-9]+)" "S\\1E\\2")
+	pr, pre, prepend STR          Prepend string STR
+	po, post, append STR          Append string STR
+	rd, replace-dots              Replace single dots with spaces
+	id, insert-dash               Insert dash after first word
+	ca, capitalize                Capitalize space-separated words
+	up, upper, uppercase          Convert all characters to uppercase
+	lo, lower, lowercase          Convert all characters to lowercase
+	tr, trim, st, strip           Trim leading and trailing whitespace
 
-	sm, start-macro                  Start recording macro
-	em, end-macro                    Stop recording macro
-	vm, view-macro                   View macro contents
-	cm, clear-macro                  Clear macro contents
-	rm, replay-macro                 Replay commands from macro
+	rm, record-macro              Start/stop recording macro
+	vm, view-macro                View macro contents
+	cm, clear-macro               Clear macro contents
+	pm, play-macro                (Re-)Play commands from macro
+	md, macro-delay VALUE         Set delay in between commands for macro play-
+	                              back to VALUE (in seconds, supports fractions)
 
-	hm, history-macro                Create macro from command history
-	vh, view-history                 View command history
-	ch, clear-history                Clear command history
+	sm, save-macro NAME           Save macro using name NAME to macro file
+	lm, load-macro NAME           Load macro named NAME from macro file
+	dm, delete-macro NAME         Delete macro named NAME from macro file
+	im, list-macros               List all macros stored in macro file
 
-	sf, set-filter <pattern>         Set filter to <pattern> and reload
-	if, invert-filter                Invert filter and reload
-	cf, case-filter                  Toggle filter case and reload
-	vf, view-filter                  View current filter state
-	rf, reset-filter                 Reset filter and reload
+	hm, history-macro             Create macro from command history
+	vh, view-history              View command history
+	ch, clear-history             Clear command history
 
-	ed, edit <index>                 Manually edit entry with index <index>
-	ud, undo                         Undo last name-altering operation
-	rc, recursive                    Toggle recursive mode and reload
-	cd, chdir <path>                 Change to directory <path> and reload
+	fp, filter-pattern PATTERN    Set filter pattern to PATTERN and reload files
+	if, invert-filter             Invert filter and reload files
+	fc, filter-case               Toggle filter case and reload files
+	vf, view-filter               View current filter state
+	rf, reset-filter              Reset filter and reload files
 
-	apply, save                      Apply changes (i.e. rename files)
-	reset, reload                    Discard changes and reload file names
+	ed, edit INDEX                Manually edit entry with index INDEX
+	ud, undo                      Undo/redo last name-altering operation
+	rc, recursive                 Toggle recursive mode and reload files
+	cd, chdir PATH                Change directory to PATH and reload files
 
-	help, usage                      Display this help/usage text
-	exit, quit                       Exit program (shortcut: CTRL+D)
+	apply, save                   Apply changes (i.e. rename files)
+	reload, reset                 Discard changes and reload files
+
+	help, usage                   Display this help/usage text
+	exit, quit                    Exit program (shortcut: CTRL+D)
 EOD
+
+
+# --------------------------------------
+#                                      -
+#  Configuration                       -
+#                                      -
+# --------------------------------------
+
+# Initial directory (if empty, current working directory is used)
+INITIAL_DIRECTORY=""
+
+# Initial filter pattern (see 'man find', option '-name pattern' for syntax;
+# '*' == all files)
+FILTER_PATTERN="*"
+
+# Initial filter invert setting ('true'/'false'; 'true' == inversion enabled)
+FILTER_INVERT="false"
+
+# Initial filter case setting ('true'/'false'; 'true' == case sensitive)
+FILTER_CASE="false"
+
+# Initial recursive mode setting ('true'/'false'; 'true' == recursion enabled)
+RECURSIVE_MODE="false"
+
+# Initial macro playback delay (in seconds, fractions are supported; '0' == no
+# delay)
+MACRO_DELAY="0.25"
+
+# Options passed to 'sort' when sorting file/folder listings (see 'man sort'
+# for valid/available options)
+SORT_OPTS=("-V")
+
+# Load/save command history from/to file on startup/exit ('true'/'false')
+PERSISTENT_HISTORY="true"
+
+# File used to store command history (only if PERSISTENT_HISTORY is enabled)
+# ${APP_DIR}:  directory where app executable ('infiren.sh') is stored
+# ${APP_NAME}: name of app executable ('infiren.sh') without extension
+# ${HOME}:     home directory of user running/executing the application
+#HISTORY_FILE="${HOME}/.config/${APP_NAME}/${APP_NAME}.hst"
+HISTORY_FILE="${APP_DIR}/${APP_NAME}.hst"
+
+# File used to store macros (managed via commands 'save-macro'/'load-macro')
+# ${APP_DIR}:  directory where app executable ('infiren.sh') is stored
+# ${APP_NAME}: name of app executable ('infiren.sh') without extension
+# ${HOME}:     home directory of user running/executing the application
+#MACROS_FILE="${HOME}/.config/${APP_NAME}/${APP_NAME}.mac"
+MACROS_FILE="${APP_DIR}/${APP_NAME}.mac"
 
 
 # --------------------------------------
@@ -84,18 +140,21 @@ function printw() { echo -e "\e[1;33m$*\e[0m"; }
 function printe() { echo -e "\e[1;31m$*\e[0m"; }
 function printd() { echo -e "\e[1;30m$*\e[0m"; }
 
-# Ask yes/no question [$1: question]
+# Ask yes/no question [$1: question, $2: newline before ('true'/'false'; default: 'true'), $3: newline after ('true'/'false'; default: 'false')]
 # Return value: 0 == yes, 1 == no
 function ask_yes_no() {
-	local input
-	echo -en "\n\e[1;33m$1 [y/n]:\e[0m "
+	local input result
+	[[ "${2:-"true"}" == "true" ]] && echo
+	echo -en "\e[1;33m$1 [y/n]:\e[0m "
 	while true; do
 		read -s -n 1 input
 		case "${input}" in
-			y|Y) echo -e "\e[1;33myes\e[0m"; return 0; ;;
-			n|N) echo -e "\e[1;33mno\e[0m"; return 1; ;;
+			y|Y) echo -e "\e[1;33myes\e[0m"; result=0; break; ;;
+			n|N) echo -e "\e[1;33mno\e[0m"; result=1; break; ;;
 		esac
 	done
+	[[ "${3:-"false"}" == "true" ]] && echo
+	return ${result}
 }
 
 # Generate list of files in current directory [$1: name of target array, $2: recursive mode, $3: filter invert, $4: filter case, $5: filter pattern]
@@ -150,7 +209,7 @@ function compare_arrays() {
 	return 0
 }
 
-# Split string into array [$1: string, $2: separator character, $3: escape character, $4: maximum items, $5: name of target array variable]
+# Split string into array [$1: string, $2: separator character, $3: escape character, $4: maximum items, $5: name of target array]
 # NOTE:
 # - Maximum items: splitting ends after this many items, rest of string is
 #   stored as last item in array; set to 0 to disable (i.e. split untils EOS)
@@ -276,7 +335,7 @@ function replace_regex() {
 	_out+="${_in}"													# add remainder of input string to output
 }
 
-# Replace single dots with spaces [$1: string, $2: name of target array variable]
+# Replace single dots with spaces [$1: string, $2: name of target array]
 function replace_dots() {
 	local _in="$1"
 	local -n _out="$2"; _out=""
@@ -295,27 +354,121 @@ function replace_dots() {
 	(( ${_dots} == 1 )) && _out+=" " || for ((_j=0; _j < _dots; _j++)); do _out+="."; done
 }
 
+# Save macro to macro file [$1: macro file, $2: macro name, $3..$n: macro contents]
+# NOTE: if no macro contents are provided, macro is DELETED from macro file
+function save_macro() {
+	local file="$1" name="$2" contents=("${@:3}")
+	local lines=() i starti=-1 endi=-1
+	if [[ -f "${file}" ]]; then
+		readarray -t lines < "${file}" || return 1
+		for ((i=0; i < "${#lines[@]}"; i++)); do
+			if (( ${starti} == -1 )); then
+				[[ "${lines[i]}" == "[${name}]" ]] && starti=$i							# '[...]' -> start of macro
+				continue
+			fi
+			[[ "${lines[i]}" == "" ]] && { endi=$i; break; }							# empty line -> end of macro
+		done
+	fi
+	if (( ${#contents[@]} > 0 )); then													# macro non-empty? -> replace or append macro
+		contents=("${contents[@]//"["/"\["}"); contents=("${contents[@]//"]"/"\]"}")	# escape square brackets
+		if (( ${starti} != -1 && ${endi} != -1 )); then
+			ask_yes_no "Macro '${name}' already exists. Overwrite?" "false" || return 2	# replace macro
+			lines=("${lines[@]:0:starti}" "[${name}]" "${contents[@]}" "" "${lines[@]:endi+1}")
+		else
+			lines+=("[${name}]")														# append macro
+			lines+=("${contents[@]}")
+			lines+=("")
+		fi
+	else # no macro contents -> delete macro
+		(( ${starti} != -1 && ${endi} != -1 )) || return 2 # macro not found
+		lines=("${lines[@]:0:starti}" "${lines[@]:endi+1}") # delete macro
+	fi
+	mkdir -p -- "$(dirname -- "${file}")" && printf "%s\n" "${lines[@]}" > "${file}" || return 1
+	return 0
+}
+
+# Load macro from macro file [$1: macro file, $2: macro name, $3: name of target array (macro contents)]
+function load_macro() {
+	local file="$1" name="$2"; local -n arrref="$3"
+	local line contents=() gotit="false"
+	while read -r line; do
+		if [[ "${gotit}" == "false" ]]; then
+			[[ "${line}" == "[${name}]" ]] && gotit="true"								# '[...]' -> start of macro
+			continue
+		fi
+		[[ "${line}" == "" ]] && break													# empty line -> end of macro
+		line="${line//"\["/"["}"; line="${line//"\]"/"]"}"								# unescape square brackets
+		contents+=("${line}")
+	done < "${file}" || return 1
+	[[ "${gotit}" == "false" ]] && return 2												# macro not found
+	arrref=("${contents[@]}")															# assign macro contents to target variable
+	return 0
+}
+
+# Delete macro from macro file  [$1: macro file, $2: macro name]
+# NOTE: simply a wrapper for 'save_macro()' for the sake clarity
+function delete_macro() {
+	save_macro "$1" "$2" && return $? || return $?
+}
+
+# List macros stored in macro file [$1: macro file, $2: name of target array (output lines)]
+function list_macros() {
+	local file="$1"; local -n arrref="$2"
+	local line output=()
+	[[ ! -f "${file}" ]] && return 0													# no macro file -> no macros to list
+	while read -r line; do
+		[[ "${line}" =~ ^\[(.+)\]$ ]] && { output+=("Macro '${BASH_REMATCH[1]}':"); continue; }
+		line="${line//"\["/"["}"; line="${line//"\]"/"]"}"								# square brackets are escaped
+		output+=("${line}")
+	done < "${file}" || return 1
+	arrref=("${output[@]::${#output[@]}-1}"); return 0									# assign output to target variable, exclude last line (which is empty)
+}
+
 
 # --------------------------------------
 #                                      -
-#  Main                                -
+#  Initialization                      -
 #                                      -
 # --------------------------------------
 
 # Set up error handler (exit on unbound variables and on unhandled errors)
 set -ueE; trap "printe \"[BUG] Error: an unhandled error occurred on line \${LINENO}, aborting\"; exit 1" ERR
 
-# Usage information requested?
+# Usage information requested? (NOTE: this refers to the command line usage
+# information, NOT the interactive commands usage information)
 if [[ -n "${1+set}" ]] && [[ "$1" == "-h" || "$1" == "--help" ]]; then
-	printn "\e[1mUsage:\e[0m ${0##*/} [START-FOLDER]"
+	printn "\e[1mUsage:\e[0m ${0##*/} [INITIAL-DIRECTORY]"
 	exit 0
 fi
 
-# Change directory and run 'cd .' to reset initial destination of 'cd -'
-if [[ -n "${1+set}" ]] && ! cd -- "$1"; then
-	printe "Error: failed to change directory to '$1', aborting"; exit 1
+# Load configuration from file
+if ! source "${APP_CONFIG}"; then
+	printe "Error: failed to load configuration from '${APP_CONFIG}', aborting."
+	exit 1
+fi
+
+# Process command line (NOTE: currently, there is only ONE single command line
+# argument; if/when adding more in the future, design those to augment config
+# variables and make them configurable via the config file)
+[[ -n "${1+set}" ]] && INITIAL_DIRECTORY="$1"
+
+#
+# TODO:
+# Check, verify and normalize config settings/items here; sort options can be
+# verified by running 'sort "${SORT_OPTS[@]}" <<< ""' and checking exit code
+#
+
+# Change directory to initial directory (if specified/set) and then run 'cd .'
+# to reset initial destination of 'cd -'
+if [[ "${INITIAL_DIRECTORY}" != "" ]] && ! cd -- "${INITIAL_DIRECTORY}"; then
+	printe "Error: failed to change to initial directory '${INITIAL_DIRECTORY}', aborting"; exit 1
 fi
 cd .
+
+# Load command history from file (if enabled)
+if [[ "${PERSISTENT_HISTORY}" == "true" && -f "${HISTORY_FILE}" ]]; then
+	history -r -- "${HISTORY_FILE}" || { printe "Error: failed to load command history from '${HISTORY_FILE}', aborting"; exit 1; }
+fi
 
 # Initialize reset lists flag
 reset_lists="true"
@@ -331,25 +484,35 @@ macro_replay="false"
 macro_index=0
 
 # Initialize filter state
-filter_pattern="*"
-filter_invert="false"
-filter_case="false"
+filter_pattern="${FILTER_PATTERN}"
+filter_invert="${FILTER_INVERT}"
+filter_case="${FILTER_CASE}"
 
 # Initialize recursive mode state
-recursive_mode="false"
+recursive_mode="${RECURSIVE_MODE}"
+
+# Initialize macro playback delay
+macro_delay="${MACRO_DELAY}"
 
 # Set up exit handler (for cosmetic reasons) and CTRL+C handler (for read
 # calls, see https://stackoverflow.com/a/63713771/1976617)
 trap "printn" EXIT
 trap ":" INT
 
-# Main loop
+
+# --------------------------------------
+#                                      -
+#  Main                                -
+#                                      -
+# --------------------------------------
+
+# Command input loop
 infos=("Enter 'help' to display available commands.")
 while true; do
 
-	# Clear screen and print header
+	# Clear screen and print application header
 	clear
-	printh "--==[ Interactive File Renamer (InFiRen) v${SCRIPT_VERSION} ]==--"
+	printh "--==[ ${APP_TITLE} v${APP_VERSION} ]==--"
 	printn
 
 	# Reset folder and file lists if requested
@@ -384,7 +547,7 @@ while true; do
 		infos=()
 	fi
 
-	# Currently replaying macro?
+	# Currently (re-)playing macro?
 	if [[ "${macro_replay}" == "false" ]]; then
 		# Prompt user for command input
 		input=$(read -e -r -p "${PROMPT_CMD}" input && echo "${input}") || {			# https://stackoverflow.com/a/63713771/1976617
@@ -394,12 +557,23 @@ while true; do
 			esac
 		}
 		[[ "${input}" == "" ]] && continue												# take shortcut if there was no input
-		history -s "${input}"															# add input to history
+		[[ "${input}" != "exit" && "${input}" != "quit" ]] && history -s -- "${input}"	# add input to history
 	else
+		# End of macro reached?
+		if (( ${macro_index} >= ${#macro_storage[@]} )); then
+			infos=("(Re-)Play of macro finished.")
+			macro_replay="false"
+			copy_array files_macro files_undo											# write file list backup created before playback started to undo list -> allows undo/redo of ENTIRE macro
+			unset files_macro
+			continue
+		fi
 		# Use next item from macro as command input
 		input="${macro_storage[${macro_index}]}"
 		macro_index=$((macro_index + 1))
-		(( ${macro_index} >= ${#macro_storage[@]} )) && macro_replay="false"
+		echo -n "${PROMPT_CMD}${input}"
+		read -s -t "${macro_delay}" || :
+		echo
+		infos=("(Re-)Playing macro ($(( ${#macro_storage[@]} - ${macro_index} )) commands left)...")
 	fi
 
 	# Evaluate command input
@@ -410,7 +584,7 @@ while true; do
 		replace-string|rs| \
 		replace-regex|re| \
 		prepend|pre|pr| \
-		append|post|ap| \
+		append|post|po| \
 		replace-dots|rd| \
 		insert-dash|id| \
 		capitalize|ca| \
@@ -447,7 +621,7 @@ while true; do
 						fi
 						name="${args[0]}${name}"
 						;;
-					append|post|ap)
+					append|post|po)
 						if (( ${#args[@]} != 1 )); then
 							errors=("Error: append: invalid number of arguments (expected 1, got ${#args[@]})")
 							continue
@@ -488,26 +662,19 @@ while true; do
 			done
 			;;
 
-		# Macro commands
-		start-macro|sm)
-			if [[ "${macro_record}" == "true" ]]; then
-				errors=("Error: start-macro: can't start recording, already started")
-				continue
-			fi
-			macro_record="true"
-			(( ${#macro_storage[@]} > 0 )) && infos=("Macro recording started. Appending existing contents.") || infos=("Macro recording started. Macro is empty.")
-			;;
-		end-macro|em)
+		# Macro commands (1)
+		record-macro|rm)
 			if [[ "${macro_record}" == "false" ]]; then
-				errors=("Error: end-macro: can't stop recording, already stopped")
-				continue
-			fi
-			macro_record="false"
-			if (( ${#macro_storage[@]} > 0 )); then
-				infos=("Macro recording stopped. Macro contents:")
-				for line in "${macro_storage[@]}"; do infos+=("${line}"); done
+				macro_record="true"
+				(( ${#macro_storage[@]} > 0 )) && infos=("Macro recording started (adding to existing contents).") || infos=("Macro recording started (macro is empty).")
 			else
-				infos=("Macro recording stopped. Macro is empty.")
+				macro_record="false"
+				if (( ${#macro_storage[@]} > 0 )); then
+					infos=("Macro recording stopped. Macro contents:")
+					for line in "${macro_storage[@]}"; do infos+=("${line}"); done
+				else
+					infos=("Macro recording stopped (macro is empty).")
+				fi
 			fi
 			;;
 		view-macro|vm)
@@ -515,24 +682,120 @@ while true; do
 				[[ "${macro_record}" == "true" ]] && infos=("Macro contents (still recording):") || infos=("Macro contents:")
 				for line in "${macro_storage[@]}"; do infos+=("${line}"); done
 			else
-				[[ "${macro_record}" == "true" ]] && infos=("Macro is empty. Still recording.") || infos=("Macro is empty.")
+				[[ "${macro_record}" == "true" ]] && infos=("Macro is empty (still recording).") || infos=("Macro is empty.")
 			fi
 			;;
 		clear-macro|cm)
 			macro_storage=()
-			[[ "${macro_record}" == "true" ]] && infos=("Macro contents cleared. Still recording.") || infos=("Macro contents cleared.")
+			[[ "${macro_record}" == "true" ]] && infos=("Macro contents cleared (still recording).") || infos=("Macro contents cleared.")
 			;;
-		replay-macro|rm)
+		play-macro|pm)
 			if [[ "${macro_record}" == "true" ]]; then
-				errors=("Error: replay-macro: can't replay macro while recording macro")
+				errors=("Error: play-macro can't (re-)play macro while recording")
 				continue
 			fi
 			if (( ${#macro_storage[@]} == 0 )); then
-				errors=("Error: replay-macro: can't replay empty macro")
+				errors=("Error: play-macro can't (re-)play empty macro")
 				continue
 			fi
+			infos=("(Re-)Playing macro (${#macro_storage[@]} commands left)...")
 			macro_replay="true"
 			macro_index=0
+			copy_array files_out files_macro											# save current file list to allow undo/redo of ENTIRE macro (see 'End of macro reached?' above)
+			;;
+		macro-delay|md)
+			if (( ${#args[@]} != 1 )); then
+				errors=("Error: macro-delay: invalid number of arguments (expected 1, got ${#args[@]})")
+				continue
+			fi
+			if ! [[ "${args[0]}" =~ ^[0-9]+$ || "${args[0]}" =~ ^[0-9]+\.[0-9]+$ ]]; then
+				errors=("Error: macro-delay: value argument must be positive integer or fraction")
+				continue
+			fi
+			macro_delay="${args[0]}"
+			infos=("Macro playback delay set to ${macro_delay}s.")
+			;;
+
+		# Macro commands (2)
+		save-macro|sm)
+			if (( ${#args[@]} != 1 )); then
+				errors=("Error: save-macro: invalid number of arguments (expected 1, got ${#args[@]})")
+				continue
+			fi
+			if [[ "${args[0]}" == "" ]]; then
+				errors=("Error: save-macro: name argument must not be empty")
+				continue
+			fi
+			if (( ${#macro_storage[@]} == 0 )); then
+				errors=("Error: save-macro: can't save empty macro")
+				continue
+			fi
+			name="${args[0]}"; printn
+			if save_macro "${MACROS_FILE}" "${name}" "${macro_storage[@]}"; then
+				infos=("Saved macro '${name}' (${#macro_storage[@]} commands).")
+			else
+				if (( $? == 2 )); then
+					infos=("Saving macro '${name}' was aborted.")
+					continue
+				fi
+				errors=("Error: save-macro: failed to save macro '${name}'")
+				printe "Error: save-macro: failed to save macro '${name}', hit ENTER to continue"; read -s || :
+			fi
+			;;
+		load-macro|lm)
+			if (( ${#args[@]} != 1 )); then
+				errors=("Error: load-macro: invalid number of arguments (expected 1, got ${#args[@]})")
+				continue
+			fi
+			if [[ "${args[0]}" == "" ]]; then
+				errors=("Error: load-macro: name argument must not be empty")
+				continue
+			fi
+			if (( ${#macro_storage[@]} > 0 )); then
+				ask_yes_no "Macro is non-empty, contents will be replaced. Continue?" || continue
+			fi
+			name="${args[0]}"; printn
+			if load_macro "${MACROS_FILE}" "${name}" macro_storage; then
+				infos=("Loaded macro '${name}':")
+				for line in "${macro_storage[@]}"; do infos+=("${line}"); done
+			else
+				if (( $? == 2 )); then
+					errors=("Error: load-macro: no macro named '${name}' found")
+					continue
+				fi
+				errors=("Error: load-macro: failed to load macro '${name}'")
+				printe "Error: load-macro: failed to load macro '${name}', hit ENTER to continue"; read -s || :
+			fi
+			;;
+		delete-macro|dm)
+			if (( ${#args[@]} != 1 )); then
+				errors=("Error: delete-macro: invalid number of arguments (expected 1, got ${#args[@]})")
+				continue
+			fi
+			if [[ "${args[0]}" == "" ]]; then
+				errors=("Error: delete-macro: name argument must not be empty")
+				continue
+			fi
+			name="${args[0]}"; printn
+			if delete_macro "${MACROS_FILE}" "${name}"; then
+				infos=("Deleted macro '${name}'.")
+			else
+				if (( $? == 2 )); then
+					errors=("Error: delete-macro: no macro named '${name}' found")
+					continue
+				fi
+				errors=("Error: delete-macro: failed to delete macro '${name}'")
+				printe "Error: delete-macro: failed to delete macro '${name}', hit ENTER to continue"; read -s || :
+			fi
+			;;
+		list-macros|im)
+			if list_macros "${MACROS_FILE}" infos; then
+				#(( ${#infos[@]} > 0 )) || infos=("No macros stored in macro file.")
+				(( ${#infos[@]} > 0 )) && infos=("Macros stored in macro file:" "" "${infos[@]}") || infos=("No macros stored in macro file.")
+			else
+				errors=("Error: list-macros: failed to list macros")
+				printe "Error: list-macros: failed to list macros, hit ENTER to continue"; read -s || :
+			fi
 			;;
 
 		# History commands
@@ -549,7 +812,7 @@ while true; do
 						replace-string|rs| \
 						replace-regex|re| \
 						prepend|pre|pr| \
-						append|post|ap| \
+						append|post|po| \
 						replace-dots|rd| \
 						insert-dash|id| \
 						capitalize|ca| \
@@ -576,9 +839,9 @@ while true; do
 			;;
 
 		# Filter commands
-		set-filter|sf)
+		filter-pattern|fp)
 			if (( ${#args[@]} != 1 )); then
-				errors=("Error: set-filter: invalid number of arguments (expected 1, got ${#args[@]})")
+				errors=("Error: filter-pattern: invalid number of arguments (expected 1, got ${#args[@]})")
 				continue
 			fi
 			if ! compare_arrays files_in files_out; then								# if there are unsaved changes ...
@@ -597,7 +860,7 @@ while true; do
 			#infos=("Filter invert set to '${filter_invert}'.")
 			[[ "${filter_invert}" == "false" ]] && infos=("Filter invert disabled.") || infos=("Filter invert enabled.")
 			;;
-		case-filter|cf)
+		filter-case|fc)
 			if ! compare_arrays files_in files_out; then								# if there are unsaved changes ...
 				ask_yes_no "There are unsaved changes. Continue anyway?" || continue	# ... prompt user before continuing
 			fi
@@ -657,6 +920,7 @@ while true; do
 			copy_array files_out files_temp												# this ...
 			copy_array files_undo files_out												# undo last operation
 			copy_array files_temp files_undo											# ... and this allows to undo undo
+			unset files_temp
 			;;
 		rc|recursive)
 			if ! compare_arrays files_in files_out; then								# if there are unsaved changes ...
@@ -708,18 +972,18 @@ while true; do
 				# something like below would do the trick (draft only, needs
 				# additional handling for edge cases; probably best to wrap it
 				# in a function that allows for rollback in case of errors)
-				#mkdir -p -- "$(dirname "${dst}")" && mv -i -- "${src}" "${dst}" && rmdir --parents --ignore-fail-on-non-empty -- "$(dirname "${src}")" || errcnt=$((errcnt + 1))
+				#mkdir -p -- "$(dirname -- "${dst}")" && mv -i -- "${src}" "${dst}" && rmdir --parents --ignore-fail-on-non-empty -- "$(dirname -- "${src}")" || errcnt=$((errcnt + 1))
 				mv -i -- "${src}" "${dst}" || errcnt=$((errcnt + 1))					# rename file, count errors
 			done
 			if (( ${errcnt} == 0 )); then
 				infos=("Succesfully renamed ${#files_in[@]} file(s).")
 			else																		# prompt user if error(s) occurred when renaming file(s)
-				printe "Error: failed to rename ${errcnt} file(s). Hit ENTER to continue."
+				printe "Error: failed to rename ${errcnt} file(s), hit ENTER to continue"
 				read -s || :
 			fi
 			reset_lists="true"															# request lists reset
 			;;
-		reset|reload)
+		reload|reset)
 			#generate_folder_list folders												# this block would allow to undo reset ...
 			#copy_array files_out files_undo											# ... disabled but keeping it for future reference
 			#generate_file_list files_in
@@ -748,6 +1012,12 @@ while true; do
 	esac
 
 done
+
+# Save command history to file (if enabled)
+if [[ "${PERSISTENT_HISTORY}" == "true" ]]; then
+	#mkdir -p -- "$(dirname -- "${HISTORY_FILE}")" && history -w -- "${HISTORY_FILE}" || { printn; printe "Error: failed to save command history to '${HISTORY_FILE}'"; exit 1; }
+	mkdir -p -- "$(dirname -- "${HISTORY_FILE}")" && history -w -- "${HISTORY_FILE}" || { printn; printe "Error: failed to save command history to '${HISTORY_FILE}'"; }
+fi
 
 # Return home safely
 exit 0
