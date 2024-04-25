@@ -1,34 +1,89 @@
+
 # Interactive File Renamer (InFiRen)
-Interactively rename multiple files from the command line. Especially useful to organize large collections (images, videos, music, etc.).
+
+Interactively rename multiple files from the command line. Especially useful to
+organize large collections of images, videos, music, etc.
+
 
 ## Donations
-I'm striving to become a full-time developer of [Free and open-source software (FOSS)](https://en.wikipedia.org/wiki/Free_and_open-source_software). Donations help me achieve that goal and are highly appreciated.
 
-<a href="https://www.buymeacoffee.com/fonic"><img src="https://raw.githubusercontent.com/fonic/donate-buttons/main/buymeacoffee-button.png" alt="Buy Me A Coffee" height="35"></a>&nbsp;&nbsp;&nbsp;<a href="https://paypal.me/fonicmaxxim"><img src="https://raw.githubusercontent.com/fonic/donate-buttons/main/paypal-button.png" alt="Donate via PayPal" height="35"></a>&nbsp;&nbsp;&nbsp;<a href="https://ko-fi.com/fonic"><img src="https://raw.githubusercontent.com/fonic/donate-buttons/main/kofi-button.png" alt="Donate via Ko-fi" height="35"></a>
+I'm striving to become a full-time developer of [Free and open-source software
+(FOSS)](https://en.wikipedia.org/wiki/Free_and_open-source_software). Donations
+help me achieve that goal and are highly appreciated.
+
+<a href="https://www.buymeacoffee.com/fonic"><img src="https://raw.githubusercontent.com/fonic/donate-buttons/main/buymeacoffee-button.png" alt="Buy Me A Coffee" height="35"></a>&nbsp;&nbsp;
+<a href="https://paypal.me/fonicmaxxim"><img src="https://raw.githubusercontent.com/fonic/donate-buttons/main/paypal-button.png" alt="Donate via PayPal" height="35"></a>&nbsp;&nbsp;
+<a href="https://ko-fi.com/fonic"><img src="https://raw.githubusercontent.com/fonic/donate-buttons/main/kofi-button.png" alt="Donate via Ko-fi" height="35"></a>
+
 
 ## Requirements
-**Dependencies:**<br/>
-_Bash (>=v4.0)_, _GNU find_ (part of [findutils](https://www.gnu.org/software/findutils/))
 
-**Platforms:**<br/>
-_Linux_ (NOTE: support for macOS/FreeBSD/Windows will be added in a future release)
+**Operating System:**<br/>
+_Linux_, _FreeBSD_, _macOS_, _Windows_
+
+**Dependencies:**<br/>
+_Bash_ (>=v5.0), _GNU find_ (part of [findutils](https://www.gnu.org/software/findutils/))
+-or- _BSD find_ (available on FreeBSD/macOS), _coreutils_ (provide basic tools
+like `dirname`, `basename`, `mkdir`, `sort`, etc.)
+
+**Note:**<br/>
+
+_macOS_ users might want to use [Homebrew](https://brew.sh/) to install
+missing dependencies.
+
+_Windows_ users need to set up a suitable runtime environment:
+[Cygwin](https://www.cygwin.com/),
+[MSYS2](https://www.msys2.org/),
+[Git for Windows](https://git-scm.com/download/win) or
+[Windows Subsystem for Linux](https://learn.microsoft.com/en-us/windows/wsl/about)
+should all work fine.
+[Git for Windows](https://git-scm.com/download/win)
+might be a good choice to get started - it is reasonably lightweight, easy to
+to set up, meets all requirements out of the box and is also available as a
+portable version.
+
 
 ## Download & Installation
-Refer to the [releases](https://github.com/fonic/infiren/releases) section for downloads links. There is no installation required. Simply extract the downloaded archive to a folder of your choice.
+
+Refer to the [releases](https://github.com/fonic/infiren/releases) section for
+downloads links. There is no actual installation required. Simply extract the
+downloaded archive to a folder of your choice.
+
 
 ## Configuration
-Open `infiren.conf` in your favorite text editor and adjust the settings to your liking. Refer to embedded comments for details. Refer to [this section](#configuration-options--defaults) for a listing of all configuration options and current defaults.
 
-## Usage
-To start _infiren_, run the following commands:
+Open `infiren.conf` in your favorite text editor and adjust the settings to
+your liking. Refer to embedded comments for details. Refer to
+[this section](#configuration-options) for a list of configuration options and
+current defaults.
+
+
+## Quick Start
+
+To start _InFiRen_, use the following command (specifying an initial directory
+is optional):
 ```
-$ cd infiren-v4.0
-$ ./infiren.sh [INITIAL-DIRECTORY]
+$ infiren.sh [INITIAL-DIRECTORY]
 ```
 
-Within _infiren_, use `help` to list available commands:
+Within _InFiRen_, enter `help` or refer to [this section](#interactive-commands)
+for a list of available _interactive commands_.
+
+Run `infiren.sh --help` or refer to [this section](#command-line-options) for
+a list of available _command line options_.
+
+
+## Showcase
+
+<a href="https://raw.githubusercontent.com/fonic/infiren/master/SHOWCASE.gif">
+<img src="https://raw.githubusercontent.com/fonic/infiren/master/SHOWCASE.gif" title="Click to enlarge" alt="Animated GIF" width="960" height="680">
+</a>
+
+
+## Interactive Commands
+
+Available interactive commands:
 ```
-Available commands:
 rs, replace-string STR REP    Replace string STR with replacement REP
 re, replace-regex RE TMP      Match regular expression RE and replace
                               matching string according to template TMP
@@ -45,9 +100,10 @@ tr, trim, st, strip           Trim leading and trailing whitespace
 rm, record-macro              Start/stop recording macro
 vm, view-macro                View macro contents
 cm, clear-macro               Clear macro contents
-pm, play-macro                (Re-)Play commands from macro
-md, macro-delay VALUE         Set delay in between commands for macro play-
-                              back to VALUE (in seconds, supports fractions)
+pm, play-macro                Play back commands stored in macro
+pd, playback-delay VALUE      Set delay in between commands for command
+                              playback to VALUE (in seconds, fractions
+                              are supported)
 
 sm, save-macro NAME           Save macro using name NAME to macro file
 lm, load-macro NAME           Load macro named NAME from macro file
@@ -58,7 +114,8 @@ hm, history-macro             Create macro from command history
 vh, view-history              View command history
 ch, clear-history             Clear command history
 
-fp, filter-pattern PATTERN    Set filter pattern to PATTERN and reload files
+fp, filter-pattern PATTERN    Set filter pattern to PATTERN and reload
+                              files
 if, invert-filter             Invert filter and reload files
 fc, filter-case               Toggle filter case and reload files
 vf, view-filter               View current filter state
@@ -76,25 +133,20 @@ help, usage                   Display this help/usage text
 exit, quit                    Exit program (shortcut: CTRL+D)
 ```
 
-## Showcase
 
-![Animated GIF](https://raw.githubusercontent.com/fonic/infiren/master/SHOWCASE.gif)
+## Command Line Options
 
-## Configuration Options & Defaults
+Available command line options:
+```
+Usage: infiren.sh [INITIAL-DIRECTORY] [CMD]...
+Note:  Commands are executed right after startup
+```
 
-Configuration options and current defaults:
+
+## Configuration Options
+
+Available configuration options (and defaults):
 ```sh
-# infiren.conf
-
-# ------------------------------------------------------------------------------
-#                                                                              -
-#  Interactive File Renamer (InFiRen)                                          -
-#                                                                              -
-#  Created by Fonic <https://github.com/fonic>                                 -
-#  Date: 04/23/19 - 09/25/23                                                   -
-#                                                                              -
-# ------------------------------------------------------------------------------
-
 # Initial directory (if empty, current working directory is used)
 INITIAL_DIRECTORY=""
 
@@ -111,9 +163,9 @@ FILTER_CASE="false"
 # Initial recursive mode setting ('true'/'false'; 'true' == recursion enabled)
 RECURSIVE_MODE="false"
 
-# Initial macro playback delay (in seconds, fractions are supported; '0' == no
-# delay)
-MACRO_DELAY="0.25"
+# Initial command playback delay (in seconds, fractions are supported; '0' ==
+# no delay)
+PLAYBACK_DELAY="0.25"
 
 # Options passed to 'sort' when sorting file/folder listings (see 'man sort'
 # for valid/available options)
@@ -137,6 +189,7 @@ HISTORY_FILE="${APP_DIR}/${APP_NAME}.hst"
 MACROS_FILE="${APP_DIR}/${APP_NAME}.mac"
 ```
 
+
 ##
 
-_Last updated: 09/25/23_
+_Last updated: 04/25/24_

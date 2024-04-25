@@ -5,9 +5,26 @@
 #  Interactive File Renamer (InFiRen)                                          -
 #                                                                              -
 #  Created by Fonic <https://github.com/fonic>                                 -
-#  Date: 04/23/19 - 09/25/23                                                   -
+#  Date: 04/23/19 - 04/25/24                                                   -
 #                                                                              -
 # ------------------------------------------------------------------------------
+
+
+# --------------------------------------
+#                                      -
+#  Early birds                         -
+#                                      -
+# --------------------------------------
+
+# Check if running Bash and required version (NOTE: this check does not rely on
+# Bashism to make sure it is guaranteed to work on any POSIX shell)
+if [ -z "${BASH_VERSION}" ] || [ "${BASH_VERSION%%.*}" -lt 5 ]; then
+	echo -e "\e[1;31mError: this script requires Bash >= v5.0 to run, aborting.\e[0m"
+	exit 1
+fi
+
+# Set up error handler (exit on unbound variables and on unhandled errors)
+set -ueE; trap "echo -e \"\e[1;31mError: an unhandled error occurred on line \${LINENO}, aborting.\e[0m\"; exit 1" ERR
 
 
 # --------------------------------------
@@ -16,11 +33,21 @@
 #                                      -
 # --------------------------------------
 
-# Application info
+# Application info (NOTE: realpath is not guaranteed to be available, e.g.
+# macOS does not have it while FreeBSD does; stripping trailing '/' off of
+# APP_DIR to account for root directory, i.e. '/'; could use ${APP_DIR%/}
+# instead to build paths, but that would be needlessly confusing for users
+# when being used within config file)
 APP_TITLE="Interactive File Renamer (InFiRen)"
-APP_VERSION="4.0 (09/25/23)"
-APP_DIR="$(dirname -- "$(realpath -- "$0")")"
-APP_FILE="$(basename -- "$(realpath -- "$0")")"
+APP_VERSION="4.2 (04/25/24)"
+if command -v realpath >/dev/null; then
+	APP_DIR="$(dirname -- "$(realpath -- "$0")")"
+	APP_FILE="$(basename -- "$(realpath -- "$0")")"
+else
+	APP_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
+	APP_FILE="$(basename -- "$0")"
+fi
+APP_DIR="${APP_DIR%/}"
 APP_NAME="${APP_FILE%.*}"
 APP_CONFIG="${APP_DIR}/${APP_NAME}.conf"
 
@@ -28,8 +55,9 @@ APP_CONFIG="${APP_DIR}/${APP_NAME}.conf"
 PROMPT_CMD="cmd> "
 PROMPT_EDIT="edit> "
 
-# Help/usage text explaining available commands
-read -r -d '' HELP_COMMANDS <<- EOD
+# Help/usage text explaining available commands (NOTE: masking errors as
+# read will encounter EOF, which will trip error handler if left unmasked)
+read -r -d '' HELP_COMMANDS <<- EOD || :
 	rs, replace-string STR REP    Replace string STR with replacement REP
 	re, replace-regex RE TMP      Match regular expression RE and replace
 	                              matching string according to template TMP
@@ -46,9 +74,10 @@ read -r -d '' HELP_COMMANDS <<- EOD
 	rm, record-macro              Start/stop recording macro
 	vm, view-macro                View macro contents
 	cm, clear-macro               Clear macro contents
-	pm, play-macro                (Re-)Play commands from macro
-	md, macro-delay VALUE         Set delay in between commands for macro play-
-	                              back to VALUE (in seconds, supports fractions)
+	pm, play-macro                Play back commands stored in macro
+	pd, playback-delay VALUE      Set delay in between commands for command
+	                              playback to VALUE (in seconds, fractions
+	                              are supported)
 
 	sm, save-macro NAME           Save macro using name NAME to macro file
 	lm, load-macro NAME           Load macro named NAME from macro file
@@ -59,7 +88,8 @@ read -r -d '' HELP_COMMANDS <<- EOD
 	vh, view-history              View command history
 	ch, clear-history             Clear command history
 
-	fp, filter-pattern PATTERN    Set filter pattern to PATTERN and reload files
+	fp, filter-pattern PATTERN    Set filter pattern to PATTERN and reload
+	                              files
 	if, invert-filter             Invert filter and reload files
 	fc, filter-case               Toggle filter case and reload files
 	vf, view-filter               View current filter state
@@ -100,9 +130,9 @@ FILTER_CASE="false"
 # Initial recursive mode setting ('true'/'false'; 'true' == recursion enabled)
 RECURSIVE_MODE="false"
 
-# Initial macro playback delay (in seconds, fractions are supported; '0' == no
-# delay)
-MACRO_DELAY="0.25"
+# Initial command playback delay (in seconds, fractions are supported; '0' ==
+# no delay)
+PLAYBACK_DELAY="0.25"
 
 # Options passed to 'sort' when sorting file/folder listings (see 'man sort'
 # for valid/available options)
@@ -133,6 +163,7 @@ MACROS_FILE="${APP_DIR}/${APP_NAME}.mac"
 # --------------------------------------
 
 # Print normal/hilite/good/warn/error/debug message [$*: message]
+# NOTE: warnings/errors are NOT sent to stderr (as script is interactive)
 function printn() { echo -e "$*"; }
 function printh() { echo -e "\e[1m$*\e[0m"; }
 function printg() { echo -e "\e[1;32m$*\e[0m"; }
@@ -140,7 +171,8 @@ function printw() { echo -e "\e[1;33m$*\e[0m"; }
 function printe() { echo -e "\e[1;31m$*\e[0m"; }
 function printd() { echo -e "\e[1;30m$*\e[0m"; }
 
-# Ask yes/no question [$1: question, $2: newline before ('true'/'false'; default: 'true'), $3: newline after ('true'/'false'; default: 'false')]
+# Ask user yes/no question [$1: question, $2: newline before ('true'/'false';
+# default: 'true'), $3: newline after ('true'/'false'; default: 'false')]
 # Return value: 0 == yes, 1 == no
 function ask_yes_no() {
 	local input result
@@ -157,21 +189,45 @@ function ask_yes_no() {
 	return ${result}
 }
 
-# Generate list of files in current directory [$1: name of target array, $2: recursive mode, $3: filter invert, $4: filter case, $5: filter pattern]
+# Ask user to hit ENTER to continue [$1: name of print function, $2: message]
+# Return value: 0 == ENTER, 1 == CTRL+D
+function ask_hit_enter() {
+	"$1" "$2"
+	read -s || return 1
+	return 0
+}
+
+# Generate list of files in current directory [$1: name of target array, $2:
+# recursive mode, $3: filter invert, $4: filter case, $5: filter pattern]
+# NOTE:
+# Using workaround to account for non-GNU find, which does NOT support option
+# '-printf': without '-printf', find results are prepended with './', which
+# messes up sorting (version sort in particular) and thus needs to be stripped
+# BEFORE sorting is performed; leaving original solution as comment for future
+# reference
 function generate_file_list() {
 	local _recursive_opts=() _filter_opts=()
 	[[ "$2" == "false" ]] && _recursive_opts+=("-maxdepth" "1")
 	[[ "$3" == "true" ]] && _filter_opts+=("-not")
 	[[ "$4" == "true" ]] && _filter_opts+=("-name" "$5") || _filter_opts+=("-iname" "$5")
-	readarray -t "$1" < <(find . -mindepth 1 "${_recursive_opts[@]}" -type f "${_filter_opts[@]}" -printf "%P\n" | sort "${SORT_OPTS[@]}")
+	#readarray -t "$1" < <(find . -mindepth 1 "${_recursive_opts[@]}" -type f "${_filter_opts[@]}" -printf "%P\n" | sort "${SORT_OPTS[@]}")
+	readarray -t "$1" < <(find . -mindepth 1 "${_recursive_opts[@]}" -type f "${_filter_opts[@]}" | cut -c 3- | sort "${SORT_OPTS[@]}")
 }
 
 # Generate list of folders in current directory [$1: name of target array]
+# NOTE:
+# Using workaround to account for non-GNU find, which does NOT support option
+# '-printf': without '-printf', find results are prepended with './', which
+# messes up sorting (version sort in particular) and thus needs to be stripped
+# BEFORE sorting is performed; leaving original solution as comment for future
+# reference; using '-mindepth 1' to keep '.' out of find results
 function generate_folder_list() {
-	readarray -t "$1" < <(find . -mindepth 1 -maxdepth 1 -type d -printf "%f\n" | sort "${SORT_OPTS[@]}")
+	#readarray -t "$1" < <(find . -mindepth 1 -maxdepth 1 -type d -printf "%f\n" | sort "${SORT_OPTS[@]}")
+	readarray -t "$1" < <(find . -mindepth 1 -maxdepth 1 -type d | cut -c 3- | sort "${SORT_OPTS[@]}")
 }
 
-# Print array (one line per element) [$1: name of array, $2: display indices (true/false)]
+# Print array (one line per element) [$1: name of array, $2: display indices
+# (true/false)]
 function print_array() {
 	local -n _array="$1"
 	if [[ "$2" == "true" ]]; then
@@ -199,17 +255,39 @@ function copy_array() {
 # Return value: 0 == equal, 1 == not equal
 # NOTE: arrays are equal if same amount of items and all items match
 function compare_arrays() {
-	local -n _arr1="$1"
-	local -n _arr2="$2"
+	local -n _array1="$1"
+	local -n _array2="$2"
 	local _i
-	(( ${#_arr1[@]} == ${#_arr2[@]} )) || return 1
-	for (( _i=0; _i < ${#_arr1[@]}; _i++ )); do
-		[[ "${_arr1[_i]}" == "${_arr2[_i]}" ]] || return 1
+	(( ${#_array1[@]} == ${#_array2[@]} )) || return 1
+	for (( _i=0; _i < ${#_array1[@]}; _i++ )); do
+		[[ "${_array1[_i]}" == "${_array2[_i]}" ]] || return 1
 	done
 	return 0
 }
 
-# Split string into array [$1: string, $2: separator character, $3: escape character, $4: maximum items, $5: name of target array]
+# Print command about to be played back [$1: cmd, $2: delay]
+# Return value: 0 == continue playback, 1 == abort playback
+# NOTE:
+# - 'if ! read ...; then if (( $? == 1 )); then ... fi; fi' will NOT work as
+#   expected as $? will always be 0, thus second 'if' is never triggered (not
+#   sure why); using 'read ... || { (( $? == 1 )) && ...; }' instead, which
+#   works as expected
+# - For delay == 0, 'read -t 0 ...' would return 1, which would trip CTRL+D
+#   detection -> added shortcut (which relies on normalized delay argument,
+#   e.g. '000.000' or '0.0' -> normalized to just '0') to bypass read calls
+function playback_print() {
+	local cmd="$1" delay="$2"
+	[[ "${delay}" == "0" ]] && { echo "${PROMPT_CMD}${cmd}"; return 0; }				# shortcut for delay == 0
+	echo -n "${PROMPT_CMD}"																# print command prompt
+	read -s -t "${delay}" || { (( $? == 1 )) && return 1; }								# delay, detect CTRL-D (abort playback)
+	echo -n "${cmd}"																	# print command
+	read -s -t "${delay}" || { (( $? == 1 )) && return 1; }								# delay, detect CTRL-D (abort playback)
+	echo
+	return 0
+}
+
+# Split string into array [$1: string, $2: separator character, $3: escape
+# character, $4: maximum items, $5: name of target array]
 # NOTE:
 # - Maximum items: splitting ends after this many items, rest of string is
 #   stored as last item in array; set to 0 to disable (i.e. split untils EOS)
@@ -217,7 +295,7 @@ function compare_arrays() {
 #   string to disable escaping
 function split_string() {
 	local _string="$1" _schar="$2" _echar="$3" _maxitems="$4"
-	local -n _array="$5"; _array=()
+	local -n _dstarr="$5"; _dstarr=()
 	local _i _char="" _item="" _items=0 _escape=0 _quote=0 _qchar=""
 	for (( _i=0; _i < ${#_string}; _i++ )); do
 		_char="${_string:_i:1}"
@@ -241,8 +319,8 @@ function split_string() {
 			fi
 		fi
 		if [[ "${_char}" == "${_schar}" ]] && (( ${_quote} == 0 )); then
-			#[[ -n "${_item}" ]] && _array+=("${_item}")
-			_array+=("${_item}")
+			#[[ -n "${_item}" ]] && _dstarr+=("${_item}")
+			_dstarr+=("${_item}")
 			_item=""
 			_items=$((_items + 1))
 			if (( ${_maxitems} > 0 && ${_items} >= ${_maxitems} )); then
@@ -253,10 +331,11 @@ function split_string() {
 		fi
 		_item+="${_char}"
 	done
-	[[ -n "${_item}" ]] && _array+=("${_item}") || :				# '|| :' is required for this to work with 'set -e' (could use 'return 0' instead)
+	[[ -n "${_item}" ]] && _dstarr+=("${_item}") || :									# '|| :' is required for this to work with 'set -e' (could use 'return 0' instead)
 }
 
-# Regular expression string replace [$1: input string, $2: regex to search for and replace, $3: replacement template, $4: name of output variable]
+# Regular expression string replace [$1: input string, $2: regex to search
+# for and replace, $3: replacement template, $4: name of output variable]
 # NOTE:
 # - Replacement template uses KDE's Kate's syntax format, for example:
 #   string '10x04', regex '([0-9]{2})x([0-9]{2})', template 'S\1E\2'
@@ -273,69 +352,69 @@ function replace_regex() {
 	local _in="$1" _re="$2" _reptmp="$3"
 	local -n _out="$4"; _out=""
 	local _repstr _escape _grpidx _i _char _match
-	if [[ -z "${_re}" ]]; then										# trivial case: empty regex -> output = input, no further processing
+	if [[ -z "${_re}" ]]; then															# trivial case: empty regex -> output = input, no further processing
 		_out="${_in}"
 		return
 	fi
-	while [[ -n "${_in}" ]] && [[ "${_in}" =~ ${_re} ]]; do			# loop while there is still input left and regex matches
-		_repstr=""; _escape=0; _grpidx=""							# generate replacement string from replacement template and regex matches
-		for (( _i=0; _i < ${#_reptmp}; _i++ )); do					# by processing template character by character
+	while [[ -n "${_in}" ]] && [[ "${_in}" =~ ${_re} ]]; do								# loop while there is still input left and regex matches
+		_repstr=""; _escape=0; _grpidx=""												# generate replacement string from replacement template and regex matches
+		for (( _i=0; _i < ${#_reptmp}; _i++ )); do										# by processing template character by character
 			_char="${_reptmp:${_i}:1}"
-			if (( ${_escape} == 1 )); then							# if escaping is active and current character is ...
-				if [[ "${_char}" == [0-9] ]]; then					# ... a digit:
-					_grpidx+="${_char}"								# found group reference (e.g. '\12') -> add digit to group index, cycle loop
+			if (( ${_escape} == 1 )); then												# if escaping is active and current character is ...
+				if [[ "${_char}" == [0-9] ]]; then										# ... a digit:
+					_grpidx+="${_char}"													# found group reference (e.g. '\12') -> add digit to group index, cycle loop
 					continue
-				elif [[ "${_char}" == "\\" ]]; then					# ... a backslash:
-					if (( ${#_grpidx} > 0 )); then					# if there is a group index: found backslash after group reference (e.g. '\12\')
-						_repstr+="${BASH_REMATCH[_grpidx]:-}"		# -> add group match to output, reset group index, leave escaping active
+				elif [[ "${_char}" == "\\" ]]; then										# ... a backslash:
+					if (( ${#_grpidx} > 0 )); then										# if there is a group index: found backslash after group reference (e.g. '\12\')
+						_repstr+="${BASH_REMATCH[_grpidx]:-}"							# -> add group match to output, reset group index, leave escaping active
 						_grpidx=""
-					else											# if there is no group index: found escaped backslash (i.e. '\\')
-						_repstr+="\\"								# -> add backslash to output, disable escaping
+					else																# if there is no group index: found escaped backslash (i.e. '\\')
+						_repstr+="\\"													# -> add backslash to output, disable escaping
 						_escape=0
 					fi
-					continue										# cycle loop
-				else												# ... something else:
-					if (( ${#_grpidx} > 0 )); then					# if there is a group index: found end of group reference (e.g. '\12x' at 'x')
-						_repstr+="${BASH_REMATCH[_grpidx]:-}"		# -> add group match to output
-					else											# if there is no group index: found non-group-reference escape sequence (e.g. '\r')
-						_repstr+="\\"								# -> add backslash to output
+					continue															# cycle loop
+				else																	# ... something else:
+					if (( ${#_grpidx} > 0 )); then										# if there is a group index: found end of group reference (e.g. '\12x' at 'x')
+						_repstr+="${BASH_REMATCH[_grpidx]:-}"							# -> add group match to output
+					else																# if there is no group index: found non-group-reference escape sequence (e.g. '\r')
+						_repstr+="\\"													# -> add backslash to output
 					fi
-					_escape=0										# disable escaping, continue normally
+					_escape=0															# disable escaping, continue normally
 				fi
 			fi
-			if [[ "${_char}" = "\\" ]]; then						# if current character is a backslash: found start of escape sequence (i.e. '\...')
-				_escape=1											# -> enable escaping, reset group index, cycle loop
+			if [[ "${_char}" = "\\" ]]; then											# if current character is a backslash: found start of escape sequence (i.e. '\...')
+				_escape=1																# -> enable escaping, reset group index, cycle loop
 				_grpidx=""
 				continue
 			fi
-			_repstr+="${_char}"										# add current character to replacement string
+			_repstr+="${_char}"															# add current character to replacement string
 		done
-		if (( ${_escape} == 1 )); then								# same as 'something else' above for end of template (condensed to single line)
+		if (( ${_escape} == 1 )); then													# same as 'something else' above for end of template (condensed to single line)
 			(( ${#_grpidx} > 0 )) && _repstr+="${BASH_REMATCH[_grpidx]:-}" || _repstr+="\\" # '||' part: treat trailing backslash as literal backslash
 		fi
 
-		_match="${BASH_REMATCH[0]}"									# substring matching ENTIRE regex -> to be replaced with replacement string
-		if [[ "${_re:0:1}" == "^" ]]; then							# special handling for regex starting with '^' (e.g. re='^' or re='^.')
-			_out="${_repstr}${_in#*"${_match}"}"					# output is replacement string + substring after match
-			_in=""													# no futher input, break loop
+		_match="${BASH_REMATCH[0]}"														# substring matching ENTIRE regex -> to be replaced with replacement string
+		if [[ "${_re:0:1}" == "^" ]]; then												# special handling for regex starting with '^' (e.g. re='^' or re='^.')
+			_out="${_repstr}${_in#*"${_match}"}"										# output is replacement string + substring after match
+			_in=""																		# no futher input, break loop
 			break
-		elif [[ "${_re: -1}" == "\$" ]]; then						# special handling for regex ending with '$' (e.g. re='$' or re='.$')
-			_out="${_in%"${_match}"*}${_repstr}"					# output is substring before match + replacement string
-			_in=""													# no futher input, break loop
+		elif [[ "${_re: -1}" == "\$" ]]; then											# special handling for regex ending with '$' (e.g. re='$' or re='.$')
+			_out="${_in%"${_match}"*}${_repstr}"										# output is substring before match + replacement string
+			_in=""																		# no futher input, break loop
 			break
 		fi
-		if [[ -z "${_match}" ]]; then								# if match is empty, prevent endless loop by advancing processing by the smallest
-			_out+="${_in:0:1}"										# amount possible (i.e. move one character from input to output and cycle loop);
-			_in="${_in:1}"											# empty matches are quite common, e.g. in='abc123def457ghi', re='[0-9]*'
+		if [[ -z "${_match}" ]]; then													# if match is empty, prevent endless loop by advancing processing by the smallest
+			_out+="${_in:0:1}"															# amount possible (i.e. move one character from input to output and cycle loop);
+			_in="${_in:1}"																# empty matches are quite common, e.g. in='abc123def457ghi', re='[0-9]*'
 			continue
 		fi
-		_out+="${_in%%"${_match}"*}${_repstr}"						# add substring before match + replacement string to output
-		_in="${_in#*"${_match}"}"									# substring after match is input for next loop iteration
+		_out+="${_in%%"${_match}"*}${_repstr}"											# add substring before match + replacement string to output
+		_in="${_in#*"${_match}"}"														# substring after match is input for next loop iteration
 	done
-	_out+="${_in}"													# add remainder of input string to output
+	_out+="${_in}"																		# add remainder of input string to output
 }
 
-# Replace single dots with spaces [$1: string, $2: name of target array]
+# Replace single dots with spaces [$1: string, $2: name of output variable]
 function replace_dots() {
 	local _in="$1"
 	local -n _out="$2"; _out=""
@@ -354,8 +433,13 @@ function replace_dots() {
 	(( ${_dots} == 1 )) && _out+=" " || for ((_j=0; _j < _dots; _j++)); do _out+="."; done
 }
 
-# Save macro to macro file [$1: macro file, $2: macro name, $3..$n: macro contents]
-# NOTE: if no macro contents are provided, macro is DELETED from macro file
+# Save macro to macro file [$1: macro file, $2: macro name, $3..$n: macro
+# contents]
+# Return value:
+#   0 == macro saved (when saving) / macro deleted (when deleting)
+#   1 == error occurred
+#   2 == saving aborted (when saving) / macro not found (when deleting)
+# NOTE: if NO macro contents are provided, macro is DELETED from macro file
 function save_macro() {
 	local file="$1" name="$2" contents=("${@:3}")
 	local lines=() i starti=-1 endi=-1
@@ -379,49 +463,58 @@ function save_macro() {
 			lines+=("${contents[@]}")
 			lines+=("")
 		fi
-	else # no macro contents -> delete macro
-		(( ${starti} != -1 && ${endi} != -1 )) || return 2 # macro not found
-		lines=("${lines[@]:0:starti}" "${lines[@]:endi+1}") # delete macro
+	else																				# no macro contents -> delete macro
+		(( ${starti} != -1 && ${endi} != -1 )) || return 2								# macro not found
+		lines=("${lines[@]:0:starti}" "${lines[@]:endi+1}")								# delete macro
 	fi
 	mkdir -p -- "$(dirname -- "${file}")" && printf "%s\n" "${lines[@]}" > "${file}" || return 1
 	return 0
 }
 
-# Load macro from macro file [$1: macro file, $2: macro name, $3: name of target array (macro contents)]
+# Load macro from macro file [$1: macro file, $2: macro name, $3: name of
+# target array (macro contents)]
+# Return value: 0 == macro loaded, 1 == error occurred, 2 == macro not found
 function load_macro() {
-	local file="$1" name="$2"; local -n arrref="$3"
-	local line contents=() gotit="false"
-	while read -r line; do
-		if [[ "${gotit}" == "false" ]]; then
-			[[ "${line}" == "[${name}]" ]] && gotit="true"								# '[...]' -> start of macro
+	local _file="$1" _name="$2"
+	local -n _dstarr="$3" #; _dstarr=()
+	local _line _contents=() _gotit="false"
+	#[[ ! -f "${_file}" ]] && return 1													# no macro file -> nothing to load macro from (DISABLED as this would mask errors)
+	while read -r _line; do
+		if [[ "${_gotit}" == "false" ]]; then
+			[[ "${_line}" == "[${_name}]" ]] && _gotit="true"							# '[...]' -> start of macro
 			continue
 		fi
-		[[ "${line}" == "" ]] && break													# empty line -> end of macro
-		line="${line//"\["/"["}"; line="${line//"\]"/"]"}"								# unescape square brackets
-		contents+=("${line}")
-	done < "${file}" || return 1
-	[[ "${gotit}" == "false" ]] && return 2												# macro not found
-	arrref=("${contents[@]}")															# assign macro contents to target variable
+		[[ "${_line}" == "" ]] && break													# empty line -> end of macro
+		_line="${_line//"\["/"["}"; _line="${_line//"\]"/"]"}"							# unescape square brackets
+		_contents+=("${_line}")
+	done < "${_file}" || return 1
+	[[ "${_gotit}" == "false" ]] && return 2											# macro not found
+	_dstarr=("${_contents[@]}")															# assign macro contents to target variable
 	return 0
 }
 
 # Delete macro from macro file  [$1: macro file, $2: macro name]
-# NOTE: simply a wrapper for 'save_macro()' for the sake clarity
+# Return value: 0 == macro deleted, 1 == error occurred, 2 == macro not found
+# NOTE: convenience wrapper for 'save_macro()' for the sake clarity
 function delete_macro() {
 	save_macro "$1" "$2" && return $? || return $?
 }
 
-# List macros stored in macro file [$1: macro file, $2: name of target array (output lines)]
+# List macros stored in macro file [$1: macro file, $2: name of target array
+# (to store listing lines)]
+# Return value: 0 == output generated, 1 == error occurred
 function list_macros() {
-	local file="$1"; local -n arrref="$2"
-	local line output=()
-	[[ ! -f "${file}" ]] && return 0													# no macro file -> no macros to list
-	while read -r line; do
-		[[ "${line}" =~ ^\[(.+)\]$ ]] && { output+=("Macro '${BASH_REMATCH[1]}':"); continue; }
-		line="${line//"\["/"["}"; line="${line//"\]"/"]"}"								# square brackets are escaped
-		output+=("${line}")
-	done < "${file}" || return 1
-	arrref=("${output[@]::${#output[@]}-1}"); return 0									# assign output to target variable, exclude last line (which is empty)
+	local _file="$1"
+	local -n _dstarr="$2" #; _dstarr=()
+	local _line _output=()
+	#[[ ! -f "${_file}" ]] && return 0													# no macro file -> no macros to list (DISABLED as this would mask errors)
+	while read -r _line; do
+		[[ "${_line}" =~ ^\[(.+)\]$ ]] && { _output+=("Macro '${BASH_REMATCH[1]}':"); continue; }
+		_line="${_line//"\["/"["}"; _line="${_line//"\]"/"]"}"							# unescape square brackets
+		_output+=("${_line}")
+	done < "${_file}" || return 1
+	_dstarr=("${_output[@]::${#_output[@]}-1}")											# assign output to target variable, exclude last line (which is empty)
+	return 0
 }
 
 
@@ -431,13 +524,12 @@ function list_macros() {
 #                                      -
 # --------------------------------------
 
-# Set up error handler (exit on unbound variables and on unhandled errors)
-set -ueE; trap "printe \"[BUG] Error: an unhandled error occurred on line \${LINENO}, aborting\"; exit 1" ERR
-
 # Usage information requested? (NOTE: this refers to the command line usage
-# information, NOT the interactive commands usage information)
+# information, NOT to the interactive commands usage information, which may
+# be displayed via command 'help'/'usage')
 if [[ -n "${1+set}" ]] && [[ "$1" == "-h" || "$1" == "--help" ]]; then
-	printn "\e[1mUsage:\e[0m ${0##*/} [INITIAL-DIRECTORY]"
+	printn "\e[1mUsage:\e[0m ${0##*/} [INITIAL-DIRECTORY] [CMD]..."
+	printn "\e[1mNote:\e[0m  Commands are executed right after startup"
 	exit 0
 fi
 
@@ -447,27 +539,29 @@ if ! source "${APP_CONFIG}"; then
 	exit 1
 fi
 
-# Process command line (NOTE: currently, there is only ONE single command line
-# argument; if/when adding more in the future, design those to augment config
-# variables and make them configurable via the config file)
-[[ -n "${1+set}" ]] && INITIAL_DIRECTORY="$1"
+# Process command line (TODO: implement command line parser and offer command
+# line options to allow changing all items currently configurable via config
+# file -> augment config variables)
+[[ -n "${1+set}" ]] && { INITIAL_DIRECTORY="$1"; shift; }
 
 #
 # TODO:
 # Check, verify and normalize config settings/items here; sort options can be
-# verified by running 'sort "${SORT_OPTS[@]}" <<< ""' and checking exit code
+# verified by running 'sort "${SORT_OPTS[@]}" <<< ""' and checking exit code;
+# especially needed for PLAYBACK_DELAY, which needs to be normalized before
+# being passed to 'playback_print()'
 #
 
 # Change directory to initial directory (if specified/set) and then run 'cd .'
 # to reset initial destination of 'cd -'
 if [[ "${INITIAL_DIRECTORY}" != "" ]] && ! cd -- "${INITIAL_DIRECTORY}"; then
-	printe "Error: failed to change to initial directory '${INITIAL_DIRECTORY}', aborting"; exit 1
+	printe "Error: failed to change to initial directory '${INITIAL_DIRECTORY}', aborting."; exit 1
 fi
 cd .
 
 # Load command history from file (if enabled)
 if [[ "${PERSISTENT_HISTORY}" == "true" && -f "${HISTORY_FILE}" ]]; then
-	history -r -- "${HISTORY_FILE}" || { printe "Error: failed to load command history from '${HISTORY_FILE}', aborting"; exit 1; }
+	history -r -- "${HISTORY_FILE}" || { printe "Error: failed to load command history from '${HISTORY_FILE}', aborting."; exit 1; }
 fi
 
 # Initialize reset lists flag
@@ -480,8 +574,6 @@ infos=()
 # Initialize macro storage/state
 macro_storage=()
 macro_record="false"
-macro_replay="false"
-macro_index=0
 
 # Initialize filter state
 filter_pattern="${FILTER_PATTERN}"
@@ -491,8 +583,12 @@ filter_case="${FILTER_CASE}"
 # Initialize recursive mode state
 recursive_mode="${RECURSIVE_MODE}"
 
-# Initialize macro playback delay
-macro_delay="${MACRO_DELAY}"
+# Initialize command playback buffer/state, set up playback of commands
+# specified on command line
+playback_delay="${PLAYBACK_DELAY}"
+playback_buffer=("$@")
+playback_index=0
+(( ${#playback_buffer[@]} > 0 )) && playback_enabled="true" || playback_enabled="false"
 
 # Set up exit handler (for cosmetic reasons) and CTRL+C handler (for read
 # calls, see https://stackoverflow.com/a/63713771/1976617)
@@ -521,6 +617,7 @@ while true; do
 		generate_file_list files_in "${recursive_mode}" "${filter_invert}" "${filter_case}" "${filter_pattern}"
 		copy_array files_in files_out
 		copy_array files_out files_undo
+		copy_array files_out files_backup												# back up file list (allows undo/redo of played back commands up to last reset -or- macro play start)
 		reset_lists="false"
 	fi
 
@@ -547,8 +644,8 @@ while true; do
 		infos=()
 	fi
 
-	# Currently (re-)playing macro?
-	if [[ "${macro_replay}" == "false" ]]; then
+	# Currently playing back commands?
+	if [[ "${playback_enabled}" == "false" ]]; then
 		# Prompt user for command input
 		input=$(read -e -r -p "${PROMPT_CMD}" input && echo "${input}") || {			# https://stackoverflow.com/a/63713771/1976617
 			case $? in
@@ -559,21 +656,27 @@ while true; do
 		[[ "${input}" == "" ]] && continue												# take shortcut if there was no input
 		[[ "${input}" != "exit" && "${input}" != "quit" ]] && history -s -- "${input}"	# add input to history
 	else
-		# End of macro reached?
-		if (( ${macro_index} >= ${#macro_storage[@]} )); then
-			infos=("(Re-)Play of macro finished.")
-			macro_replay="false"
-			copy_array files_macro files_undo											# write file list backup created before playback started to undo list -> allows undo/redo of ENTIRE macro
-			unset files_macro
+		# End of playback buffer reached?
+		if (( ${playback_index} >= ${#playback_buffer[@]} )); then
+			infos=("Command playback finished (${#playback_buffer[@]} commands).")
+			playback_enabled="false"
+			playback_buffer=()
+			copy_array files_backup files_undo											# write file list backup to undo list (allows undo/redo of played back commands up to last reset -or- macro play start)
 			continue
 		fi
-		# Use next item from macro as command input
-		input="${macro_storage[${macro_index}]}"
-		macro_index=$((macro_index + 1))
-		echo -n "${PROMPT_CMD}${input}"
-		read -s -t "${macro_delay}" || :
-		echo
-		infos=("(Re-)Playing macro ($(( ${#macro_storage[@]} - ${macro_index} )) commands left)...")
+
+		# Use next item from buffer as command input
+		printw "Playing back commands (command $((playback_index+1)) of ${#playback_buffer[@]}, delay ${playback_delay}s), hit CTRL+D to abort..."
+		printn																			# using 'printw' instead of 'infos' here to have only one single place where this needs to be done
+		input="${playback_buffer[${playback_index}]}"
+		playback_index=$((playback_index + 1))
+		if ! playback_print "${input}" "${playback_delay}"; then						# CTRL+D -> abort playback
+			infos=("Command playback aborted (at command ${playback_index} of ${#playback_buffer[@]}).")
+			playback_enabled="false"
+			playback_buffer=()
+			copy_array files_backup files_undo											# write file list backup to undo list (allows undo/redo of played back commands up to last reset -or- macro play start)
+			continue
+		fi
 	fi
 
 	# Evaluate command input
@@ -597,6 +700,7 @@ while true; do
 				[[ -n "${error+set}" ]] && break										# break loop if error was set in previous iteration
 				file="${files_out[i]}"
 				[[ "${file}" == */* ]] && dir="${file%/*}/" || dir=""					# extract leading directory part if existing
+				#name="${file##*/}"
 				name="${file##*/}"; name="${name%.*}"									# extract file name part (without directory and extension)
 				[[ "${file}" == *.* ]] && ext=".${file##*.}" || ext=""					# extract trailing extension part if existing
 				case "${cmd}" in
@@ -658,6 +762,7 @@ while true; do
 						name="${name%"${name##*[![:space:]]}"}"							# trim trailing whitespace
 						;;
 				esac
+				#files_out[i]="${dir}${name}"
 				files_out[i]="${dir}${name}${ext}"
 			done
 			;;
@@ -691,29 +796,38 @@ while true; do
 			;;
 		play-macro|pm)
 			if [[ "${macro_record}" == "true" ]]; then
-				errors=("Error: play-macro can't (re-)play macro while recording")
+				errors=("Error: play-macro: can't play back macro while recording")
 				continue
 			fi
 			if (( ${#macro_storage[@]} == 0 )); then
-				errors=("Error: play-macro can't (re-)play empty macro")
+				errors=("Error: play-macro: can't play back empty macro")
 				continue
 			fi
-			infos=("(Re-)Playing macro (${#macro_storage[@]} commands left)...")
-			macro_replay="true"
-			macro_index=0
-			copy_array files_out files_macro											# save current file list to allow undo/redo of ENTIRE macro (see 'End of macro reached?' above)
+			if [[ "${playback_enabled}" == "true" ]]; then								# already playing back commands? -> inject macro contents into existing playback buffer stream
+				playback_buffer=("${playback_buffer[@]::${playback_index}}" "${macro_storage[@]}" "${playback_buffer[@]:${playback_index}}")
+			else																		# currently not playing back commands -> set up and start command playback
+				copy_array files_out files_backup										# back up current file list to allow undo/redo of ENTIRE macro (see 'End of playback buffer reached?' above)
+				playback_buffer=("${macro_storage[@]}")
+				playback_index=0
+				playback_enabled="true"
+			fi
+			infos=("Starting playback of macro (${#macro_storage[@]} commands).")
 			;;
-		macro-delay|md)
+		playback-delay|pd)
 			if (( ${#args[@]} != 1 )); then
-				errors=("Error: macro-delay: invalid number of arguments (expected 1, got ${#args[@]})")
+				errors=("Error: playback-delay: invalid number of arguments (expected 1, got ${#args[@]})")
 				continue
 			fi
 			if ! [[ "${args[0]}" =~ ^[0-9]+$ || "${args[0]}" =~ ^[0-9]+\.[0-9]+$ ]]; then
-				errors=("Error: macro-delay: value argument must be positive integer or fraction")
+				errors=("Error: playback-delay: value argument must be positive integer or fraction")
 				continue
 			fi
-			macro_delay="${args[0]}"
-			infos=("Macro playback delay set to ${macro_delay}s.")
+			if [[ "${args[0]}" =~ ^[0]+$ || "${args[0]}" =~ ^[0]+\.[0]+$ ]]; then		# if specified delay == 0 (might be '000', '0.0' or '00.00') ...
+				playback_delay="0"														# ... normalize to just '0' for easier handling within 'playback_print()'
+			else
+				playback_delay="${args[0]}"
+			fi
+			infos=("Command playback delay set to ${playback_delay}s.")
 			;;
 
 		# Macro commands (2)
@@ -738,8 +852,8 @@ while true; do
 					infos=("Saving macro '${name}' was aborted.")
 					continue
 				fi
-				errors=("Error: save-macro: failed to save macro '${name}'")
-				printe "Error: save-macro: failed to save macro '${name}', hit ENTER to continue"; read -s || :
+				#errors=("Error: save-macro: failed to save macro '${name}'")
+				printn; ask_hit_enter printe "Error: save-macro: failed to save macro '${name}', hit ENTER to continue" || :
 			fi
 			;;
 		load-macro|lm)
@@ -763,8 +877,8 @@ while true; do
 					errors=("Error: load-macro: no macro named '${name}' found")
 					continue
 				fi
-				errors=("Error: load-macro: failed to load macro '${name}'")
-				printe "Error: load-macro: failed to load macro '${name}', hit ENTER to continue"; read -s || :
+				#errors=("Error: load-macro: failed to load macro '${name}'")
+				printn; ask_hit_enter printe "Error: load-macro: failed to load macro '${name}', hit ENTER to continue" || :
 			fi
 			;;
 		delete-macro|dm)
@@ -784,17 +898,18 @@ while true; do
 					errors=("Error: delete-macro: no macro named '${name}' found")
 					continue
 				fi
-				errors=("Error: delete-macro: failed to delete macro '${name}'")
-				printe "Error: delete-macro: failed to delete macro '${name}', hit ENTER to continue"; read -s || :
+				#errors=("Error: delete-macro: failed to delete macro '${name}'")
+				printn; ask_hit_enter printe "Error: delete-macro: failed to delete macro '${name}', hit ENTER to continue" || :
 			fi
 			;;
 		list-macros|im)
+			printn
 			if list_macros "${MACROS_FILE}" infos; then
 				#(( ${#infos[@]} > 0 )) || infos=("No macros stored in macro file.")
 				(( ${#infos[@]} > 0 )) && infos=("Macros stored in macro file:" "" "${infos[@]}") || infos=("No macros stored in macro file.")
 			else
-				errors=("Error: list-macros: failed to list macros")
-				printe "Error: list-macros: failed to list macros, hit ENTER to continue"; read -s || :
+				#errors=("Error: list-macros: failed to list macros")
+				printn; ask_hit_enter printe "Error: list-macros: failed to list macros, hit ENTER to continue" || :
 			fi
 			;;
 
@@ -906,11 +1021,13 @@ while true; do
 			printn
 			file="${files_out[index-1]}"
 			[[ "${file}" == */* ]] && dir="${file%/*}/" || dir=""						# extract leading directory part if existing
-			name="${file##*/}"; name="${name%.*}"										# extract file name part (without directory and extension)
-			[[ "${file}" == *.* ]] && ext=".${file##*.}" || ext=""						# extract trailing extension part if existing
+			#name="${file##*/}"; name="${name%.*}"										# extract file name part (without directory and extension)
+			#[[ "${file}" == *.* ]] && ext=".${file##*.}" || ext=""						# extract trailing extension part if existing
+			name="${file##*/}"
 			name=$(history -c; read -e -r -p "${PROMPT_EDIT}" -i "${name}" name && echo "${name}") || continue	# clear history in subshell to allow for clean editing
 			copy_array files_out files_undo												# save undo data
-			files_out[index-1]="${dir}${name}${ext}"									# modify entry
+			#files_out[index-1]="${dir}${name}${ext}"									# modify entry
+			files_out[index-1]="${dir}${name}"											# modify entry
 			;;
 		undo|ud)
 			if compare_arrays files_out files_undo; then								# if arrays match, there's nothing to undo
@@ -962,24 +1079,24 @@ while true; do
 				if [[ -e "${dst}" ]]; then												# if destination already exists ...
 					name="${dst%.*}"													# ... split into name ...
 					[[ "${dst}" == *.* ]] && ext=".${dst##*.}" || ext=""				# ... and extension, ...
-					for (( j=1; ; j++ )); do
+					for (( j=1; ; j++ )); do											# CAUTION: could result in a endless loop on overflow due to LOTS of files
 						dst="${name}_${j}${ext}"										# ... add postfix to name ('_1', '_2', etc.) ...
 						[[ ! -e "${dst}" ]] && break									# ... and break once collision is resolved
 					done
 				fi
 				# NOTE:
-				# Should the need arise to move files to different directories,
-				# something like below would do the trick (draft only, needs
-				# additional handling for edge cases; probably best to wrap it
-				# in a function that allows for rollback in case of errors)
+				# Should the need arise to move files to different directories (e.g. due to
+				# directory part becoming editable), something like this would do the trick
+				# (draft only, likely needs additional checks for edge cases; probably best
+				# to wrap this in a function to allow for rollback in case of errors):
 				#mkdir -p -- "$(dirname -- "${dst}")" && mv -i -- "${src}" "${dst}" && rmdir --parents --ignore-fail-on-non-empty -- "$(dirname -- "${src}")" || errcnt=$((errcnt + 1))
 				mv -i -- "${src}" "${dst}" || errcnt=$((errcnt + 1))					# rename file, count errors
 			done
 			if (( ${errcnt} == 0 )); then
 				infos=("Succesfully renamed ${#files_in[@]} file(s).")
 			else																		# prompt user if error(s) occurred when renaming file(s)
-				printe "Error: failed to rename ${errcnt} file(s), hit ENTER to continue"
-				read -s || :
+				#errors=("Error: failed to rename ${errcnt} file(s)")
+				printn; ask_hit_enter printe "Error: failed to rename ${errcnt} file(s), hit ENTER to continue" || :
 			fi
 			reset_lists="true"															# request lists reset
 			;;
